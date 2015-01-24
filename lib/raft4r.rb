@@ -15,6 +15,7 @@ module Raft4r
 			def initialize
 				super
 				@states = :follower
+				@rpc_client = nil
 			end
 
 			def new_connection 
@@ -23,7 +24,7 @@ module Raft4r
 
 			def AppendEntries req
 				p req
-				response_method req, RPC::Response.new
+				response_method req, [0]
 			end
 		end
 
