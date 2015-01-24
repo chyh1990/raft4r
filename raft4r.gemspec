@@ -6,7 +6,12 @@ Gem::Specification.new do |s|
   s.description = "Ruby Raft implementation"
   s.authors     = ["Yuheng Chen"]
   s.email       = 'chyh1990@gmail.com'
-  s.files       = ["lib/raft4r.rb"]
   s.homepage    = 'http://rubygems.org/gems/raft4r'
   s.license       = 'MIT'
+
+  s.files         = `git ls-files`.split("\n")
+  s.require_paths = ["lib"]
+  
+  s.add_dependency 'eventmachine'
+  s.add_development_dependency 'test-unit', '>=3.0.0'
 end
