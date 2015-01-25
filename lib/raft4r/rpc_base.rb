@@ -2,8 +2,9 @@ require 'eventmachine'
 
 module Raft4r
 	module RPC
+		# sender node_id
 		Request = Struct.new :node_id, :req_id, :method, :arguments
-		Response = Struct.new :req_id, :code, :response
+		Response = Struct.new :node_id, :req_id, :code, :response
 
 		class Request
 			def to_id
@@ -12,7 +13,8 @@ module Raft4r
 		end
 
 		class RPCMachine
-			def initialize
+			def initialize server_node_id
+				@node_id = server_node_id
 				@req_pool = Hash.new
 			end
 
@@ -24,11 +26,11 @@ module Raft4r
 			def response_method req, resp
 				r = @req_pool[req.to_id]
 				return unless r
-				p = Marshal.dump Response.new(req.req_id, 0, resp)
+				p = Marshal.dump Response.new(@node_id, req.req_id, 0, resp)
 				r[0].send_data p
 				#r[0].close_connection_after_writing
 				@req_pool.delete req.to_id
-				LOGGER.info req.inspect
+				#LOGGER.info req.inspect
 			end
 		end
 
@@ -43,18 +45,15 @@ module Raft4r
 			end
 
 			def receive_data data
-				#LOGGER.info "Data: #{data}"
-				LOGGER.info "data"
 				r = Marshal.load(data)
 				@mach.call_method self, r
-				#p r
-				#send_data("wrong")
 			end
 		end
 
 		class EMRPCServer
 			def self.start_server addr, port, handler
 				EM.run {
+					handler.on_init if handler.respond_to? :on_init
 					us = EM.open_datagram_socket addr, port, RPCConn, handler
 				}
 			end
@@ -69,19 +68,19 @@ module Raft4r
 				req = @h.pending[resp.req_id]
 				return unless req
 				@h.pending.delete resp.req_id
-				req[1].call resp
+				req[1].call req[0], resp if req[1]
 			end
 		end
 
 		class EMRPCClient
 			attr_reader :pending
 			RPC_TIMEOUT = 10
-			def initialize addr, port, node_id
+			def initialize addr, port, sender_node_id
 				@addr = addr
 				@port = port
 				@current_reqid = Time.now.to_i + rand(1000)
 				@pending = {}
-				@node_id = node_id
+				@node_id = sender_node_id
 				@us = EM.open_datagram_socket '127.0.0.1', 0, RPCClientConn, self
 				EM.add_periodic_timer(RPC_TIMEOUT / 2) do
 					now = Time.now
