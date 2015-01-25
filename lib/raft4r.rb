@@ -11,7 +11,7 @@ module Raft4r
 	class RaftHandler < RPC::RPCMachine
 		#HEARTBEAT_TIMEOUT = 5
 		HEARTBEAT_TIMEOUT = 3
-		REQUEST_VOTE_TIMEOUT = 2
+		REELECT_TIMEOUT = 2
 		def initialize config, node_id
 			super node_id
 			@config = config
@@ -56,6 +56,10 @@ module Raft4r
 			LOGGER.info "#{@node_id}: #{str}"
 		end
 
+		def print_state
+			info "State: #{@state}, leader: #{@current_leader}, term: #{@current_term}"
+		end
+
 		def clear_timer
 			@timer.cancel if @timer
 		end
@@ -69,11 +73,14 @@ module Raft4r
 
 		def on_timer_check_heartbeat
 			return unless @state == :follower
-			info "current leader: '#{@current_leader}'"
+			print_state
 			timestamp = Time.now.to_f
 			if timestamp - @last_heartbeat > HEARTBEAT_TIMEOUT
-				info "Reelect leader"
-				become_candidate
+				# reelect leader only not voted
+				if @vote_for.nil?
+					info "Reelect leader"
+					become_candidate
+				end
 			end
 		end
 
@@ -81,6 +88,7 @@ module Raft4r
 			return unless @state == :leader
 			info "send heartbeat"
 
+			print_state
 			@cluster.each { |k,v|
 				# TODO
 				v.conn.AppendEntries @current_term, @node_id, 0, 0, nil, 0
@@ -171,6 +179,7 @@ module Raft4r
 		end
 
 		def RequestVote req
+			info "RequestVote from #{req.node_id}"
 			on_rpc_common req
 			response_method req, [@current_term, false] if req.arguments[0] < @current_term
 			# or @vote_for == candidateId??
@@ -185,6 +194,7 @@ module Raft4r
 					vote = req.arguments[2] >= @log.size
 				end
 				if vote
+					info "Vote for #{candidateId}"
 					@vote_for = candidateId
 					response_method req, [@current_term, true]
 				else
