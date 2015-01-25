@@ -10,8 +10,10 @@ module Raft4r
 	LogEntry = Struct.new :term, :log
 	class RaftHandler < RPC::RPCMachine
 		#HEARTBEAT_TIMEOUT = 5
-		HEARTBEAT_TIMEOUT = 3
-		REELECT_TIMEOUT = 2
+		#HEARTBEAT_TIMEOUT = 3
+		#REELECT_TIMEOUT_MAX = 0.4
+		ELECTION_TIMEOUT_MIN_MS = 2000
+		HEARTBEAT_PER_TIMEOUT = 3
 		def initialize config, node_id
 			super node_id
 			@config = config
@@ -20,7 +22,8 @@ module Raft4r
 			@last_heartbeat = 0
 			@cluster = {}
 			
-
+			# XXX debug only
+			@election_timeout = (ELECTION_TIMEOUT_MIN_MS + rand(ELECTION_TIMEOUT_MIN_MS) ) / 1000.0
 			# persistent state
 			@current_term = 0
 			@vote_for = nil
@@ -47,8 +50,10 @@ module Raft4r
 				c = RaftCluster.new v, RPC::EMRPCClient.new(v['bind'], v['port'], @node_id)
 				@cluster[k] = c
 			}
+			info "election_timeout #{@election_timeout}s"
 			#p @cluster
 			become_follower
+			EM::PeriodicTimer.new(5) { print_state }
 		end
 
 		private
@@ -61,43 +66,37 @@ module Raft4r
 		end
 
 		def clear_timer
-			@timer.cancel if @timer
+			@heartbeat_timer.cancel if @heartbeat_timer
 		end
 
 		def set_term term
 			@current_term = term
 			@vote_for = nil
 			@get_votes = {}
+			#reset_election_timer
 			info "set term to #{@current_term}"
 		end
 
-		def on_timer_check_heartbeat
-			return unless @state == :follower
-			print_state
-			timestamp = Time.now.to_f
-			if timestamp - @last_heartbeat > HEARTBEAT_TIMEOUT
-				# reelect leader only not voted
-				if @vote_for.nil?
-					info "Reelect leader"
-					become_candidate
-				end
+		def on_election_timeout
+			# ignore if i'm leader
+			#return if @state == :leader
+			case @state
+			when :candidate
+				info "election timout by candidate"
+				start_new_election
+			when :follower
+				info "election timout by follower"
+				become_candidate
+			when :leader
+				# empty
 			end
 		end
 
-		def on_timer_heartbeat
-			return unless @state == :leader
-			info "send heartbeat"
-
-			print_state
-			@cluster.each { |k,v|
-				# TODO
-				v.conn.AppendEntries @current_term, @node_id, 0, 0, nil, 0
-			}
-
+		def reset_election_timer
+			@election_timer.cancel if @election_timer
+			@election_timer = EM::PeriodicTimer.new(@election_timeout) { on_election_timeout }
 		end
 
-		def on_timer_reelect
-		end
 
 		def become_follower
 			return if @state == :follower
@@ -105,7 +104,7 @@ module Raft4r
 
 			clear_timer
 			@state = :follower
-			@timer = EM::PeriodicTimer.new(HEARTBEAT_TIMEOUT) { on_timer_check_heartbeat }
+			reset_election_timer
 		end
 
 		def on_vote node_id
@@ -116,15 +115,14 @@ module Raft4r
 			end
 		end
 
-		def become_candidate
-			return if @state == :candidate
-			info "become candidate"
-			clear_timer
-			@state = :candidate
-
+		def start_new_election
+			fail 'ILLEGAL STATE' unless @state == :candidate
+			info "start new election"
 			# no leader...
 			@current_leader = nil
 			@get_votes = 0
+			# reset election timer
+
 			set_term @current_term + 1
 			# random step back
 			#timeout = (100 + rand(200)) / 1000.0
@@ -140,7 +138,27 @@ module Raft4r
 					on_vote resp.node_id if resp.response[1]
 				end
 			}
-			# TODO reelect
+		end
+
+		def become_candidate
+			return if @state == :candidate
+			info "become candidate"
+			clear_timer
+			@state = :candidate
+
+			start_new_election
+		end
+
+
+		def on_timer_heartbeat
+			return unless @state == :leader
+
+			#print_state
+			@cluster.each { |k,v|
+				# TODO
+				v.conn.AppendEntries @current_term, @node_id, 0, 0, nil, 0
+			}
+
 		end
 
 		def become_leader
@@ -150,9 +168,10 @@ module Raft4r
 			@state = :leader
 			@current_leader = @node_id
 
+			info "start sending heartbeat"
 			on_timer_heartbeat
 
-			@timer = EM::PeriodicTimer.new(HEARTBEAT_TIMEOUT / 3.0) { on_timer_heartbeat }
+			@heartbeat_timer = EM::PeriodicTimer.new(ELECTION_TIMEOUT_MIN_MS / 1000.0 / HEARTBEAT_PER_TIMEOUT) { on_timer_heartbeat }
 		end
 
 		def on_rpc_common req
@@ -164,7 +183,7 @@ module Raft4r
 
 		public
 		def AppendEntries req
-			info "AppendEntries from #{req.node_id}"
+			#info "AppendEntries from #{req.node_id}"
 			# check req
 			response_method req, [@current_term, false] if req.arguments[0] < @current_term
 			on_rpc_common req
@@ -173,15 +192,16 @@ module Raft4r
 				become_follower
 			end
 
-			@last_heartbeat = Time.now.to_f
+			reset_election_timer
 			@current_leader = req.node_id
 			response_method req, [@current_term, true]
 		end
 
 		def RequestVote req
 			info "RequestVote from #{req.node_id}"
-			on_rpc_common req
 			response_method req, [@current_term, false] if req.arguments[0] < @current_term
+			on_rpc_common req
+
 			# or @vote_for == candidateId??
 			candidateId = req.arguments[1]
 			if @vote_for.nil? || @vote_for == candidateId
@@ -196,6 +216,7 @@ module Raft4r
 				if vote
 					info "Vote for #{candidateId}"
 					@vote_for = candidateId
+					reset_election_timer
 					response_method req, [@current_term, true]
 				else
 					response_method req, [@current_term, false]

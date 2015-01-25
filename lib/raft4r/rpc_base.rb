@@ -74,7 +74,7 @@ module Raft4r
 
 		class EMRPCClient
 			attr_reader :pending
-			RPC_TIMEOUT = 10
+			RPC_TIMEOUT = 1
 			def initialize addr, port, sender_node_id
 				@addr = addr
 				@port = port
