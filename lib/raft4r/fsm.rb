@@ -53,10 +53,10 @@ module Raft4r
 			@fsm_states[s] = ss
 		end
 
-		def on s
+		def on s, *arguments
 			curr = @fsm_states[@fsm_current]
 			if curr.triggers[s]
-				self.instance_eval(&curr.triggers[s])
+				self.instance_exec(*arguments, &curr.triggers[s])
 			else
 				STDERR.puts "State: #{@fsm_current}, trigger #{s} not exists"
 			end
