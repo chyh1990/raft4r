@@ -50,7 +50,7 @@ module Raft4r
 				c = RaftCluster.new v, RPC::EMRPCClient.new(v['bind'], v['port'], @node_id)
 				@cluster[k] = c
 			}
-			info "election_timeout #{@election_timeout}s"
+			info "init: election_timeout #{@election_timeout}s"
 			#p @cluster
 			become_follower
 			EM::PeriodicTimer.new(5) { print_state }
@@ -149,7 +149,6 @@ module Raft4r
 			start_new_election
 		end
 
-
 		def on_timer_heartbeat
 			return unless @state == :leader
 
@@ -182,10 +181,11 @@ module Raft4r
 		end
 
 		public
+		# on RPC request
 		def AppendEntries req
 			#info "AppendEntries from #{req.node_id}"
 			# check req
-			response_method req, [@current_term, false] if req.arguments[0] < @current_term
+			return [@current_term, false] if req.arguments[0] < @current_term
 			on_rpc_common req
 			# heartbeat from new leader
 			if @state == :candidate && req.arguments[0] == @current_term
@@ -194,12 +194,12 @@ module Raft4r
 
 			reset_election_timer
 			@current_leader = req.node_id
-			response_method req, [@current_term, true]
+			return [@current_term, true]
 		end
 
 		def RequestVote req
 			info "RequestVote from #{req.node_id}"
-			response_method req, [@current_term, false] if req.arguments[0] < @current_term
+			return [@current_term, false] if req.arguments[0] < @current_term
 			on_rpc_common req
 
 			# or @vote_for == candidateId??
@@ -217,13 +217,13 @@ module Raft4r
 					info "Vote for #{candidateId}"
 					@vote_for = candidateId
 					reset_election_timer
-					response_method req, [@current_term, true]
+					return [@current_term, true]
 				else
-					response_method req, [@current_term, false]
+					return [@current_term, false]
 				end
 			else
 				# this node already voted
-				response_method req, [@current_term, false]
+				return [@current_term, false]
 			end
 		end
 	end

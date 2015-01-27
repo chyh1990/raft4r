@@ -19,8 +19,16 @@ module Raft4r
 			end
 
 			def call_method conn, r
-				@req_pool[r.to_id] = [conn, r]
-				self.__send__ r.method.to_sym, r
+				# if the machine supports async call,
+				# try it first
+				if self.respond_to? :"Async#{r.method}"
+					@req_pool[r.to_id] = [conn, r]
+					self.__send__ r.method.to_sym, r
+				else
+					v = self.__send__ r.method.to_sym, r
+					p = Marshal.dump Response.new(@node_id, r.req_id, 0, v)
+					conn.send_data p
+				end
 			end
 
 			def response_method req, resp
