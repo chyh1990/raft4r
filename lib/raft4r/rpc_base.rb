@@ -12,13 +12,9 @@ module Raft4r
 			end
 		end
 
-		class RPCMachine
-			def initialize server_node_id
-				@node_id = server_node_id
-				@req_pool = Hash.new
-			end
-
+		module RPCMachine
 			def call_method conn, r
+				@req_pool ||= Hash.new
 				# if the machine supports async call,
 				# try it first
 				if self.respond_to? :"Async#{r.method}"

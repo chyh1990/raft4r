@@ -1,6 +1,7 @@
 require 'delegate'
 require 'logger'
 require 'raft4r/rpc_base.rb'
+require 'raft4r/fsm.rb'
 
 module Raft4r
 	VERSION = '0.1.0'
@@ -8,15 +9,18 @@ module Raft4r
 
 	RaftCluster = Struct.new :config, :conn
 	LogEntry = Struct.new :term, :log
-	class RaftHandler < RPC::RPCMachine
+	class RaftHandler
 		#HEARTBEAT_TIMEOUT = 5
 		#HEARTBEAT_TIMEOUT = 3
 		#REELECT_TIMEOUT_MAX = 0.4
 		ELECTION_TIMEOUT_MIN_MS = 2000
 		HEARTBEAT_PER_TIMEOUT = 3
+		attr_reader :node_id, :config
+
+		include RPC::RPCMachine
 		def initialize config, node_id
-			super node_id
 			@config = config
+			@node_id = node_id
 			@node_config = @config[node_id]
 
 			@last_heartbeat = 0
