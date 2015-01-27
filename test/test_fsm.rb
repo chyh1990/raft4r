@@ -3,6 +3,8 @@ require 'raft4r'
 include Raft4r
 class MyFSM < FSM
 	attr_reader :t
+	def do_helper
+	end
 	def initialize
 		init :init
 		state :init do
@@ -13,6 +15,7 @@ class MyFSM < FSM
 				goto :done
 			end
 			trigger :t2 do |arg|
+				do_helper
 				@t = arg
 				goto :s1
 			end

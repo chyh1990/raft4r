@@ -1,0 +1,32 @@
+def helper
+	puts "helper"
+end
+
+init :init
+state :init do
+	enter do
+		@t = 0
+	end
+	trigger :t1 do
+		helper
+		goto :done
+	end
+	trigger :t2 do |arg|
+		@t = arg
+		goto :s1
+	end
+end
+
+state :done do
+	enter do
+		@t = 1
+	end
+end
+
+state :s1 do
+	trigger :t3 do
+		goto :done
+	end
+end
+
+# vim: set ft=ruby:

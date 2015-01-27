@@ -84,4 +84,57 @@ module Raft4r
 		end
 	end
 
+	class FSMDrawer < BasicObject
+		def initialize
+			@init = nil
+			@states = {}
+		end
+
+		def init s
+			@init = s
+		end
+
+		def enter
+		end
+
+		def leave
+		end
+
+		def goto s
+			@triggers << s
+		end
+
+		def trigger t, &block
+			@triggers = @curr[t] || []
+			self.instance_eval &block
+			@curr[t] = @triggers
+		end
+
+		def state s, &block
+			@curr = {}
+			self.instance_eval &block
+			@states[s] = @curr
+		end
+
+		def dump
+			::Kernel::p @states
+		end
+
+		def to_dot
+			s = []
+			s << "digraph graphname{"
+			@states.each {|k,v|
+				v.each {|tn, ns|
+					s << "\t#{k} -> #{ns.first} [label=\"#{tn}\"]"
+				}
+			}
+			s << "\t__init__ -> #{@init}"
+			s << "}"
+			s.join("\n")
+		end
+
+		def method_missing(name, *args, &block)
+		end
+	end
 end
+
