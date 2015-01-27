@@ -9,7 +9,7 @@ module Raft4r
 
 	RaftCluster = Struct.new :config, :conn
 	LogEntry = Struct.new :term, :log
-	class RaftHandler
+	class RaftHandler < FSM
 		#HEARTBEAT_TIMEOUT = 5
 		#HEARTBEAT_TIMEOUT = 3
 		#REELECT_TIMEOUT_MAX = 0.4
@@ -46,6 +46,8 @@ module Raft4r
 			# vote state
 			@get_votes = {}
 			@current_leader = nil
+
+			create_fsm
 		end
 
 		def on_init
@@ -56,21 +58,86 @@ module Raft4r
 			}
 			info "init: election_timeout #{@election_timeout}s"
 			#p @cluster
-			become_follower
 			EM::PeriodicTimer.new(5) { print_state }
+
+			# reset FSM
+			reset
 		end
 
 		private
+		def create_fsm
+			init :follower
+			state :follower do
+				enter do
+					info "become follower"
+					reset_election_timer
+				end
+
+				trigger :election_timeout do
+					info "election timout by follower"
+					goto :candidate
+				end
+
+				trigger [:discover_higher_term, :discover_current_leader] do
+					# do nothing
+				end
+			end
+
+			state :candidate do
+				enter do
+					info "become candidate"
+					reset_election_timer
+					start_new_election
+					@current_leader = nil
+				end
+
+				trigger :election_timeout do
+					info "election timout by candidate"
+					start_new_election
+				end
+
+				trigger [:discover_higher_term, :discover_current_leader] do
+					goto :follower
+				end
+
+				trigger :get_majority do
+					goto :leader
+				end
+			end
+
+			state :leader do
+				enter do
+					info 'become leader'
+					@current_leader = @node_id
+					on_timer_heartbeat
+					@heartbeat_timer = EM::PeriodicTimer.new(ELECTION_TIMEOUT_MIN_MS / 1000.0 / HEARTBEAT_PER_TIMEOUT) { on :heartbeat_timer }
+
+				end
+
+				trigger :election_timeout do
+					# do nothing
+				end
+
+				trigger :heartbeat_timer do
+					on_timer_heartbeat
+				end
+
+				trigger :discover_higher_term do
+					goto :follower
+				end
+
+				leave do
+					@heartbeat_timer.cancel
+				end
+			end
+		end
+
 		def info str
 			LOGGER.info "#{@node_id}: #{str}"
 		end
 
 		def print_state
-			info "State: #{@state}, leader: #{@current_leader}, term: #{@current_term}"
-		end
-
-		def clear_timer
-			@heartbeat_timer.cancel if @heartbeat_timer
+			info "State: #{current_state}, leader: #{@current_leader}, term: #{@current_term}"
 		end
 
 		def set_term term
@@ -81,46 +148,21 @@ module Raft4r
 			info "set term to #{@current_term}"
 		end
 
-		def on_election_timeout
-			# ignore if i'm leader
-			#return if @state == :leader
-			case @state
-			when :candidate
-				info "election timout by candidate"
-				start_new_election
-			when :follower
-				info "election timout by follower"
-				become_candidate
-			when :leader
-				# empty
-			end
-		end
-
 		def reset_election_timer
 			@election_timer.cancel if @election_timer
-			@election_timer = EM::PeriodicTimer.new(@election_timeout) { on_election_timeout }
-		end
-
-
-		def become_follower
-			return if @state == :follower
-			info "become follower"
-
-			clear_timer
-			@state = :follower
-			reset_election_timer
+			@election_timer = EM::PeriodicTimer.new(@election_timeout) { on :election_timeout }
 		end
 
 		def on_vote node_id
 			@get_votes[node_id] = true
 			if @get_votes.size > @cluster.size / 2
 				info "get majority"
-				become_leader
+				on :get_majority
 			end
 		end
 
 		def start_new_election
-			fail 'ILLEGAL STATE' unless @state == :candidate
+			fail 'ILLEGAL STATE' unless current_state == :candidate
 			info "start new election"
 			# no leader...
 			@current_leader = nil
@@ -137,24 +179,15 @@ module Raft4r
 			@cluster.each {|k,v|
 				# XXX what if get reply in the future?
 				v.conn.RequestVote @current_term, @node_id, @log.size, @log.last.term do |req, resp|
-					next unless @state == :candidate
+					next unless current_state == :candidate
 					info "Get vote from #{k}: #{resp.response[1]}"
 					on_vote resp.node_id if resp.response[1]
 				end
 			}
 		end
 
-		def become_candidate
-			return if @state == :candidate
-			info "become candidate"
-			clear_timer
-			@state = :candidate
-
-			start_new_election
-		end
-
 		def on_timer_heartbeat
-			return unless @state == :leader
+			return unless current_state == :leader
 
 			#print_state
 			@cluster.each { |k,v|
@@ -164,23 +197,10 @@ module Raft4r
 
 		end
 
-		def become_leader
-			return if @state == :leader
-			info "become leader"
-			clear_timer
-			@state = :leader
-			@current_leader = @node_id
-
-			info "start sending heartbeat"
-			on_timer_heartbeat
-
-			@heartbeat_timer = EM::PeriodicTimer.new(ELECTION_TIMEOUT_MIN_MS / 1000.0 / HEARTBEAT_PER_TIMEOUT) { on_timer_heartbeat }
-		end
-
 		def on_rpc_common req
 			if req.arguments[0] > @current_term
 				set_term req.arguments[0]
-				become_follower
+				on :discover_higher_term
 			end
 		end
 
@@ -192,8 +212,9 @@ module Raft4r
 			return [@current_term, false] if req.arguments[0] < @current_term
 			on_rpc_common req
 			# heartbeat from new leader
-			if @state == :candidate && req.arguments[0] == @current_term
-				become_follower
+			if req.arguments[0] == @current_term
+				# if state is candidate
+				on :discover_current_leader
 			end
 
 			reset_election_timer

@@ -7,8 +7,11 @@ module Raft4r
 		end
 
 		def trigger t, &block
-			raise 'trigger already exists' if @triggers[t]
-			@triggers[t] = block
+			t = [t] if !(Array === t)
+			t.each {|e|
+				raise 'trigger already exists' if @triggers[e]
+				@triggers[e] = block
+			}
 		end
 
 		def enter &block
@@ -31,9 +34,9 @@ module Raft4r
 			curr
 		end
 
-		def set_current n
-			raise "Invalid new state #{s}" unless @fsm_states[n]
-			@fsm_current = n
+		def set_current s
+			raise "Invalid new state #{s}" unless @fsm_states[s]
+			@fsm_current = s
 		end
 		private :current, :set_current
 
@@ -54,10 +57,13 @@ module Raft4r
 			curr = @fsm_states[@fsm_current]
 			if curr.triggers[s]
 				self.instance_eval(&curr.triggers[s])
+			else
+				STDERR.puts "State: #{@fsm_current}, trigger #{s} not exists"
 			end
 		end
 
 		def goto s
+			return if s == @current
 			self.instance_eval(&current.onleave) if current.onleave
 			set_current s
 			self.instance_eval(&current.onenter) if current.onenter
@@ -71,6 +77,10 @@ module Raft4r
 
 		def dump
 			p self
+		end
+
+		def current_state
+			@fsm_current
 		end
 	end
 
